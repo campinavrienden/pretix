@@ -1,0 +1,169 @@
+name: Sync with pretix upstream
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream
+        run: |
+          git remote add upstream https://github.com/pretix/pretix.git
+
+      - name: Remember existing tags
+        shell: bash
+        run: |
+          git fetch origin --tags
+          git tag --list | sort > /tmp/tags-before.txt
+
+      - name: Fetch upstream
+        run: |
+          git fetch upstream \
+            --prune \
+            --tags \
+            '+refs/heads/*:refs/remotes/upstream/*'
+
+      # Keep our own workflow files on master.
+      - name: Sync master
+        run: |
+          git checkout master
+
+          git merge \
+            --no-edit \
+            --no-ff \
+            upstream/master
+
+          git push origin master
+
+      # All other upstream branches are mirrored exactly.
+      - name: Sync upstream branches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while read -r branch; do
+            [ -z "$branch" ] && continue
+
+            if [ "$branch" = "master" ]; then
+              continue
+            fi
+
+            echo "Syncing branch: $branch"
+
+            git push origin \
+              "refs/remotes/upstream/$branch:refs/heads/$branch" \
+              --force
+
+          done < <(
+            git for-each-ref \
+              --format='%(refname:strip=3)' \
+              refs/remotes/upstream
+          )
+
+      - name: Sync tags
+        run: |
+          git push origin --tags
+
+      # ----------------------------------------------------------
+      # Only trigger Docker builds for stable pretix releases.
+      #
+      # Accepted:
+      #   2026.6.1
+      #   2025.12.3
+      #   5.2.1
+      #
+      # Rejected:
+      #   4.x.x and older
+      #   2026.6
+      #   2026.7.0rc1
+      #   2026.7.0-beta1
+      #   arbitrary tags
+      # ----------------------------------------------------------
+      - name: Find new Docker releases
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch origin --tags
+
+          git tag --list | sort > /tmp/tags-after.txt
+
+          comm -13 \
+            /tmp/tags-before.txt \
+            /tmp/tags-after.txt \
+            > /tmp/new-tags.txt
+
+          echo "New tags:"
+          cat /tmp/new-tags.txt || true
+
+          > /tmp/docker-releases.txt
+
+          while read -r tag; do
+
+            [ -z "$tag" ] && continue
+
+            # Must be X.Y.Z
+            if [[ ! "$tag" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "Ignoring non-release tag: $tag"
+              continue
+            fi
+
+            major="${BASH_REMATCH[1]}"
+
+            # Ignore pretix 4.x and older
+            if (( major < 5 )); then
+              echo "Ignoring old pretix release: $tag"
+              continue
+            fi
+
+            echo "Docker release: $tag"
+            echo "$tag" >> /tmp/docker-releases.txt
+
+          done < /tmp/new-tags.txt
+
+          echo
+          echo "Docker releases to build:"
+          cat /tmp/docker-releases.txt || true
+
+      - name: Trigger Docker builds
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          while read -r tag; do
+
+            [ -z "$tag" ] && continue
+
+            echo "Starting Docker build for $tag"
+
+            gh workflow run docker-arm64.yml \
+              --ref master \
+              -f release_tag="$tag"
+
+          done < /tmp/docker-releases.txt
