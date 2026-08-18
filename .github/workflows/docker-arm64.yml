@@ -1,4 +1,6 @@
-name: Build pretix Docker image
+name: Build pretix Docker release
+
+run-name: Build pretix ${{ inputs.release_tag }}
 
 on:
   workflow_dispatch:
@@ -27,6 +29,34 @@ jobs:
           ref: ${{ inputs.release_tag }}
           fetch-depth: 0
 
+      - name: Determine Docker version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.release_tag }}"
+
+          if [[ "$VERSION" != v* ]]; then
+            echo "Invalid release tag: $VERSION"
+            echo "Expected a tag starting with v"
+            exit 1
+          fi
+
+          VERSION="${VERSION#v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Not a stable release: $VERSION"
+            exit 1
+          fi
+
+          MAJOR="${VERSION%%.*}"
+
+          if (( MAJOR < 5 )); then
+            echo "Pretix version $VERSION is older than 5.x"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -44,16 +74,10 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-
-          platforms: |
-            linux/amd64
-            linux/arm64
-
+          platforms: linux/amd64,linux/arm64
           push: true
-
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/pretix:${{ inputs.release_tag }}
-
+            ${{ secrets.DOCKERHUB_USERNAME }}/pretix:${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -62,15 +86,9 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-
-          platforms: |
-            linux/amd64
-            linux/arm64
-
+          platforms: linux/amd64,linux/arm64
           push: true
-
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/pretix:latest
-
           cache-from: type=gha
           cache-to: type=gha,mode=max
