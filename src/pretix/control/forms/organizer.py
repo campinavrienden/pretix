@@ -38,7 +38,6 @@ from urllib.parse import urlparse
 from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db.models import Q
 from django.forms import formset_factory, inlineformset_factory
 from django.forms.utils import ErrorDict
 from django.urls import reverse
@@ -70,9 +69,9 @@ from pretix.base.forms.widgets import (
     SplitDateTimePickerWidget, format_placeholders_help_text,
 )
 from pretix.base.models import (
-    Customer, Device, Event, EventMetaProperty, Gate, GiftCard,
-    GiftCardAcceptance, Membership, MembershipType, OrderPosition, Organizer,
-    ReusableMedium, SalesChannel, Team,
+    Customer, Device, Event, EventMetaProperty, Gate, GiftCard, Membership,
+    MembershipType, OrderPosition, Organizer, ReusableMedium, SalesChannel,
+    Team,
 )
 from pretix.base.models.customers import CustomerSSOClient, CustomerSSOProvider
 from pretix.base.models.organizer import OrganizerFooterLink, TeamQuerySet
@@ -894,15 +893,7 @@ class GiftCardCreateForm(forms.ModelForm):
 
     def clean_secret(self):
         s = self.cleaned_data['secret']
-        if GiftCard.objects.filter(
-                secret__iexact=s
-        ).filter(
-            Q(issuer=self.organizer) |
-            Q(issuer__in=GiftCardAcceptance.objects.filter(
-                acceptor=self.organizer,
-                active=True,
-            ).values_list('issuer', flat=True))
-        ).exists():
+        if self.organizer.accepted_gift_cards.filter(secret__iexact=s).exists():
             raise ValidationError(
                 _('A gift card with the same secret already exists in your or an affiliated organizer account.')
             )
@@ -1198,7 +1189,7 @@ OrganizerFooterLinkFormset = inlineformset_factory(
 class SSOProviderForm(I18nModelForm):
 
     config_oidc_base_url = forms.URLField(
-        label=pgettext_lazy('sso_oidc', 'Base URL'),
+        label=pgettext_lazy('sso_oidc', 'Base URL / issuer'),
         required=False,
     )
     config_oidc_client_id = forms.CharField(
@@ -1295,6 +1286,14 @@ class SSOProviderForm(I18nModelForm):
 
 
 class SSOClientForm(I18nModelForm):
+    disp_base_url = forms.CharField(
+        label=_('Base URL / issuer'),
+        disabled=True,
+    )
+    disp_client_id = forms.CharField(
+        label=_('Client ID'),
+        disabled=True,
+    )
     regenerate_client_secret = forms.BooleanField(
         label=_('Invalidate old client secret and generate a new one'),
         required=False,
@@ -1302,7 +1301,8 @@ class SSOClientForm(I18nModelForm):
 
     class Meta:
         model = CustomerSSOClient
-        fields = ['is_active', 'name', 'client_id', 'client_type', 'authorization_grant_type', 'redirect_uris',
+        fields = ['is_active', 'name', 'disp_base_url', 'disp_client_id', 'regenerate_client_secret',
+                  'client_type', 'authorization_grant_type', 'redirect_uris',
                   'allowed_scopes', 'require_pkce']
         widgets = {
             'authorization_grant_type': forms.RadioSelect,
@@ -1317,13 +1317,15 @@ class SSOClientForm(I18nModelForm):
             help_text=self.fields['allowed_scopes'].help_text,
             required=self.fields['allowed_scopes'].required,
             initial=self.fields['allowed_scopes'].initial,
-            choices=CustomerSSOClient.SCOPE_CHOICES,
+            choices=[(val, format_html('<code>{}</code> &ndash; {}', val, label)) for val, label in CustomerSSOClient.SCOPE_CHOICES],
             widget=forms.CheckboxSelectMultiple
         )
+        organizer = kwargs['event']
+        self.initial['disp_base_url'] = eventreverse_absolute(organizer, 'presale:organizer.index', {}).strip('/')
         if self.instance and self.instance.pk:
-            self.fields['client_id'].disabled = True
+            self.initial['disp_client_id'] = self.instance.client_id
         else:
-            del self.fields['client_id']
+            self.initial['disp_client_id'] = _('(will be generated)')
             del self.fields['regenerate_client_secret']
 
 

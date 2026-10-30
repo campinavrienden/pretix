@@ -359,7 +359,8 @@ def mark_order_refunded(order, user=None, auth=None, api_token=None):
 
 def mark_order_expired(order, user=None, auth=None):
     """
-    Mark this order as expired. This sets the payment status and returns the order object.
+    Mark this order as expired. This sets the order status, generates an invoice cancellation
+    and returns the order object.
     :param order: The order to change
     :param user: The user that performed the change
     """
@@ -969,7 +970,7 @@ def _apply_rounding_and_fees(positions: List[CartPosition], payment_requests: Li
     gift_cards = []  # for backwards compatibility
     for p in payment_requests:
         if p['provider'] == 'giftcard':
-            gift_cards.append(GiftCard.objects.get(pk=p['info_data']['gift_card']))
+            gift_cards.extend(event.organizer.accepted_gift_cards.filter(pk=p['info_data']['gift_card']))
 
     for recv, resp in order_fee_calculation.send(sender=event, invoice_address=address, total=total, payment_requests=payment_requests,
                                                  meta_info=meta_info, positions=positions, gift_cards=gift_cards):
