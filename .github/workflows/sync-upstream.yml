@@ -107,21 +107,24 @@ jobs:
           > /tmp/docker-releases.txt
 
           while read -r tag; do
-
+          
             [ -z "$tag" ] && continue
-
-            
-
-            major="${BASH_REMATCH[1]}"
-
+          
+            if [[ "$tag" =~ ^v([0-9]+)\. ]]; then
+              major="${BASH_REMATCH[1]}"
+            else
+              echo "Ignoring non-release tag: $tag"
+              continue
+            fi
+          
             if (( major < 5 )); then
               echo "Ignoring old pretix release: $tag"
               continue
             fi
-
+          
             echo "Docker release: $tag"
             echo "$tag" >> /tmp/docker-releases.txt
-
+          
           done < /tmp/new-tags.txt
 
           echo
