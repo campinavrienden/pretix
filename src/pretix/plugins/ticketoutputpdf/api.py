@@ -98,19 +98,32 @@ class TicketLayoutSerializer(I18nAwareModelSerializer):
         return d
 
     def validate(self, attrs):
-        if attrs.get('default') and self.context['event'].ticket_layouts.filter(default=True).exists:
+        if attrs.get('default') and self.context['event'].ticket_layouts.filter(default=True).exists():
             raise ValidationError('You cannot have two layouts with default = True')
         return attrs
 
     def create(self, validated_data):
         validated_data["event"] = self.context["event"]
-        return super().create(validated_data)
+        background = validated_data.pop("background", None)
+        instance = super().create(validated_data)
+        if background:
+            instance.background.save('background.pdf', background)
+        return instance
+
+    def update(self, instance, validated_data):
+        background = validated_data.pop("background", None)
+        if background:
+            if instance.background and TicketLayout.objects.filter(background=instance.background).count() == 1:
+                instance.background.delete()
+            instance.background.save('background.pdf', background)
+        return super().update(instance, validated_data)
 
 
 class TicketLayoutViewSet(viewsets.ModelViewSet):
     serializer_class = TicketLayoutSerializer
     queryset = TicketLayout.objects.none()
     lookup_field = 'id'
+    write_permission = 'event.settings.general:write'
 
     def get_queryset(self):
         return self.request.event.ticket_layouts.all()
