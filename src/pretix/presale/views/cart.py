@@ -247,8 +247,7 @@ def _items_from_post_data(request, warn_if_empty=True):
         pass
 
     items = []
-    if 'raw' in request.POST:
-        items += json.loads(request.POST.get("raw"))
+
     for key, values in req_items:
         for value in values:
             try:
@@ -263,6 +262,7 @@ def _items_from_post_data(request, warn_if_empty=True):
     if len(items) == 0 and warn_if_empty:
         messages.warning(request, _('You did not select any products.'))
         return []
+
     return items
 
 
