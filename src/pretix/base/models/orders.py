@@ -93,7 +93,7 @@ from ...testutils.middleware import debugflags_var
 from ._transactions import (
     _fail, _transactions_mark_order_clean, _transactions_mark_order_dirty,
 )
-from .base import LockModel, LoggedModel
+from .base import LoggedModel
 from .event import Event, SubEvent
 from .items import Item, ItemVariation, Question, QuestionOption, Quota
 
@@ -136,7 +136,7 @@ class OrderQuerySet(models.QuerySet):
         return order
 
 
-class Order(LockModel, LoggedModel):
+class Order(LoggedModel):
     """
     An order is created when a user clicks 'buy' on his cart. It holds
     several OrderPositions and is connected to a user. It has an
@@ -2431,7 +2431,7 @@ class OrderFee(RoundingCorrectionMixin, models.Model):
             self.fee_type, self.value
         )
 
-    def _calculate_tax(self, tax_rule=None, invoice_address=None, event=None):
+    def _calculate_tax(self, tax_rule=None, invoice_address=None, event=None, override_tax_rate=None, override_tax_code=None):
         if tax_rule:
             self.tax_rule = tax_rule
 
@@ -2450,7 +2450,8 @@ class OrderFee(RoundingCorrectionMixin, models.Model):
             self.tax_rule = event.cached_default_tax_rule
 
         if self.tax_rule:
-            tax = self.tax_rule.tax(self.value, base_price_is='gross', invoice_address=ia, force_fixed_gross_price=True)
+            tax = self.tax_rule.tax(self.value, base_price_is='gross', invoice_address=ia, force_fixed_gross_price=True,
+                                    override_tax_rate=override_tax_rate, override_tax_code=override_tax_code)
             self.tax_rate = tax.rate
             self.tax_code = tax.code
             self.tax_value = tax.tax
@@ -2813,14 +2814,15 @@ class OrderPosition(AbstractPosition):
             self.item.id, self.variation.id if self.variation else 0, self.order_id
         )
 
-    def _calculate_tax(self, tax_rule=None, invoice_address=None):
+    def _calculate_tax(self, tax_rule=None, invoice_address=None, override_tax_rate=None, override_tax_code=None):
         self.tax_rule = tax_rule or self.item.tax_rule
         try:
             ia = invoice_address or self.order.invoice_address
         except InvoiceAddress.DoesNotExist:
             ia = None
         if self.tax_rule:
-            tax = self.tax_rule.tax(self.price, invoice_address=ia, base_price_is='gross', force_fixed_gross_price=True)
+            tax = self.tax_rule.tax(self.price, invoice_address=ia, base_price_is='gross', force_fixed_gross_price=True,
+                                    override_tax_rate=override_tax_rate, override_tax_code=override_tax_code)
             self.tax_rate = tax.rate
             self.tax_code = tax.code
             self.tax_value = tax.tax
@@ -3358,11 +3360,12 @@ class CartPosition(AbstractPosition):
             bundled_sum=sum([b.price_after_voucher for b in bundled_positions]),
             is_bundled=self.is_bundled,
         )
-        if line_price.gross != self.line_price_gross or line_price.rate != self.tax_rate:
+
+        if line_price.gross != self.line_price_gross or line_price.rate != self.tax_rate or line_price.code != self.tax_code:
             self.line_price_gross = line_price.gross
             self.tax_rate = line_price.rate
             self.tax_code = line_price.code
-            self.save(update_fields=['line_price_gross', 'tax_rate'])
+            self.save(update_fields=['line_price_gross', 'tax_rate', 'tax_code'])
 
     @property
     def discount_percentage(self):
